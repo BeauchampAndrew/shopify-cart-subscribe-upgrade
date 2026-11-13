@@ -1,0 +1,11 @@
+horizon/
+CLAUDE.local.md
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+.DS_Store
+video/
+docs/superpowers/
+.superpowers/
