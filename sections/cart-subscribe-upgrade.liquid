@@ -1,0 +1,855 @@
+{%- comment -%}
+  Cart Subscribe Upgrade: a big "Subscribe & save" button under each one-time item in the cart drawer.
+  https://github.com/BeauchampAndrew/shopify-cart-subscribe-upgrade
+  One portable section file. Install and customization notes: README.md (people) and AGENTS.md (AI agents).
+
+  The section renders a hidden <cart-subscribe-upgrade> wherever it is placed (footer or header group).
+  Its JS finds the theme's cart drawer and adds a card under every cart line whose product has a
+  selling plan: a button on one-time lines, a frequency picker on subscription lines. The discount
+  and frequencies are read from the products' selling plans (/products/<handle>.js), never hardcoded.
+  Switching uses the Cart AJAX API (/cart/change.js with selling_plan), then asks the theme to redraw.
+{%- endcomment -%}
+
+<cart-subscribe-upgrade data-section-id="{{ section.id }}">
+  {%- if request.design_mode -%}
+    <p class="csu-editor-note">
+      Subscribe upgrade: add a product with a subscription plan to the cart and open the cart drawer to see it.
+    </p>
+  {%- endif -%}
+  <script type="application/json" data-csu-config>
+    {
+      "moneyFormat": {{ shop.money_format | json }},
+      "planPosition": {{ section.settings.plan_position | json }},
+      "itemCard": {{ section.settings.item_card | json }},
+      "strikeLines": {{ section.settings.strike_lines | json }},
+      "hidePlanName": {{ section.settings.hide_plan_name | json }},
+      "showTotalSavings": {{ section.settings.show_total_savings | json }},
+      "text": {
+        "headline": {{ section.settings.button_headline | json }},
+        "subline": {{ section.settings.button_subline | json }},
+        "cta": {{ section.settings.button_cta | json }},
+        "subscribed": {{ section.settings.on_label | json }},
+        "frequency": {{ section.settings.on_frequency_label | json }},
+        "savings": {{ section.settings.on_savings | json }},
+        "switchBack": {{ section.settings.on_switch_back | json }},
+        "loading": {{ section.settings.loading_text | json }},
+        "error": {{ section.settings.error_text | json }},
+        "totalSavings": {{ section.settings.total_savings_text | json }}
+      },
+      "colors": {
+        "buttonBg": {{ section.settings.color_button_bg | json }},
+        "buttonText": {{ section.settings.color_button_text | json }},
+        "highlightBg": {{ section.settings.color_highlight_bg | json }},
+        "highlightText": {{ section.settings.color_highlight_text | json }},
+        "stripBg": {{ section.settings.color_strip_bg | json }},
+        "cardBorder": {{ section.settings.color_card_border | json }},
+        "accent": {{ section.settings.color_accent | json }}
+      },
+      "selectors": {
+        "drawer": {{ section.settings.drawer_selector | json }},
+        "row": {{ section.settings.row_selector | json }},
+        "linePrice": {{ section.settings.line_price_selector | json }},
+        "unitPrice": {{ section.settings.unit_price_selector | json }},
+        "total": {{ section.settings.total_selector | json }}
+      }
+    }
+  </script>
+</cart-subscribe-upgrade>
+
+{% stylesheet %}
+  cart-subscribe-upgrade { display: block; }
+  .csu-editor-note { margin: 0; padding: 12px 16px; font-size: 13px; opacity: .7; text-align: center; }
+
+  /* Color defaults. The section's color settings override these per instance (see applyColors). */
+  .csu, [data-csu-card], .csu-total-saving {
+    --csu-button-bg: #1f5b3d; --csu-button-text: #ffffff; --csu-highlight-bg: #f6e05e; --csu-highlight-text: #1c2a20;
+    --csu-strip-bg: #eef6f0; --csu-card-border: #e3e3e3; --csu-accent: #1f5b3d;
+  }
+
+  /* Cell that holds the strip inside the theme's cart row. In grid rows (Horizon) it spans every column. */
+  .csu-cell { display: block; grid-column: 1 / -1; width: 100%; min-width: 0; margin: 0; padding: 0; border: 0; background: none; }
+  td.csu-cell { padding: 0; }
+
+  /* Layout A: the theme's row becomes one outlined card and the strip is its bottom edge.
+     !important because themes set row padding, dividers and borders with more specific selectors. */
+  [data-csu-card] { border: 1px solid var(--csu-card-border) !important; border-radius: 14px !important; padding: 14px !important; }
+  [data-csu-card] > .csu-cell { width: auto !important; margin: 14px -14px -14px !important; }
+
+  /* The strip. On its own (rows that can't be a card) it gets its own outline. */
+  .csu {
+    margin: 12px 0 0; overflow: hidden; border: 1px solid var(--csu-card-border); border-radius: 12px;
+    background: var(--csu-strip-bg); font: inherit; font-size: 14px; line-height: 1.3; text-align: left; color: inherit;
+  }
+  [data-csu-card] .csu { margin: 0; border: 0; border-top: 1px solid var(--csu-card-border); border-radius: 0 0 13px 13px; }
+  .csu *, .csu *::before, .csu *::after { box-sizing: border-box; }
+  .csu svg { display: block; width: 100%; height: 100%; }
+
+  /* One-time line: the whole strip is one button */
+  .csu__offer {
+    -webkit-appearance: none; appearance: none;
+    display: flex; align-items: center; gap: 12px; width: 100%; min-height: 68px; margin: 0; padding: 12px 14px;
+    border: 0; border-radius: 0; background: transparent; color: inherit;
+    font: inherit; font-size: inherit; letter-spacing: normal; text-transform: none; text-align: left; line-height: 1.3;
+    box-shadow: none; cursor: pointer;
+  }
+  .csu__offer:focus-visible { outline: 2px solid var(--csu-button-bg); outline-offset: -3px; }
+  .csu__offer:disabled { cursor: progress; }
+  .csu__body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .csu__head { font-size: 15px; font-weight: 700; line-height: 1.2; color: var(--csu-accent); }
+  .csu__sub { font-size: 13px; line-height: 1.5; }
+  .csu__hl { display: inline-block; padding: 0 6px; border-radius: 5px; background: var(--csu-highlight-bg); color: var(--csu-highlight-text); font-weight: 700; white-space: nowrap; }
+  .csu__cta {
+    flex: none; display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0 18px; border-radius: 22px;
+    background: var(--csu-button-bg); color: var(--csu-button-text); font-size: 14px; font-weight: 700; white-space: nowrap;
+    transition: filter .15s ease, transform .12s ease;
+  }
+  .csu__offer:hover .csu__cta { filter: brightness(1.12); }
+  .csu__offer:active .csu__cta { transform: scale(.97); }
+  .csu__spin { display: none; width: 15px; height: 15px; }
+
+  /* Subscription line */
+  .csu__on { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+  .csu__line1 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+  .csu__check { flex: none; width: 22px; height: 22px; padding: 5px; border-radius: 50%; background: var(--csu-accent); color: #fff; }
+  .csu__label { font-weight: 700; }
+  .csu__freq { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13.5px; }
+  .csu__freq select {
+    -webkit-appearance: none; appearance: none; width: auto; min-height: 34px; margin: 0; padding: 4px 28px 4px 10px;
+    border: 1px solid rgba(0, 0, 0, .18); border-radius: 8px; color: inherit; font: inherit; font-weight: 600;
+    background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23333' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 9px center / 11px;
+    cursor: pointer;
+  }
+  .csu__freq select:focus-visible { outline: 2px solid var(--csu-accent); outline-offset: 2px; }
+  .csu__freq-one { font-weight: 600; }
+  .csu__line2 { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; font-size: 13px; }
+  .csu__save b { color: var(--csu-accent); font-weight: 700; }
+  .csu__cmp s { margin-right: 4px; opacity: .6; }
+  .csu__cmp[hidden] { display: none; }
+  .csu__link {
+    -webkit-appearance: none; appearance: none; min-height: 32px; margin: 0; padding: 0; border: 0; background: none; box-shadow: none;
+    color: inherit; font: inherit; font-size: 13px; letter-spacing: normal; text-transform: none;
+    text-decoration: underline; text-underline-offset: 2px; opacity: .75; cursor: pointer;
+  }
+  .csu__link:hover { opacity: 1; }
+  .csu__link:focus-visible { outline: 2px solid var(--csu-accent); outline-offset: 2px; }
+
+  /* Busy and error */
+  .csu__status { display: none; }
+  .csu.is-busy .csu__sub, .csu.is-busy .csu__save { display: none; }
+  .csu.is-busy .csu__status { display: inline; font-size: 13px; }
+  .csu.is-busy .csu__spin { display: inline-block; animation: csu-spin .9s linear infinite; }
+  .csu__err { margin: 0; padding: 0 14px 12px; font-size: 13px; color: #b42318; }
+  .csu__err[hidden] { display: none; }
+
+  /* Decorations applied to the theme's own cart markup. !important on spacing: themes reset margins inside cart rows. */
+  .csu-was { margin: 0 .4em 0 0 !important; font-weight: 400; opacity: .55; text-decoration: line-through; }
+  [data-csu-hidden] { display: none !important; }
+  .csu-was--total { font-size: .72em; }
+  .csu-total-saving {
+    margin: 8px 0 0 !important; padding: 8px 12px; border-radius: 10px; background: var(--csu-strip-bg); color: var(--csu-accent);
+    font-size: 13px; font-weight: 400; line-height: 1.4; text-align: left;
+  }
+  .csu-total-saving b { font-weight: 700; }
+
+  /* The one moment of motion: a line that just became a subscription */
+  .csu.is-new .csu__on { animation: csu-in .35s ease-out; }
+  .csu.is-new .csu__check { animation: csu-pop .5s ease-out; }
+  @keyframes csu-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @keyframes csu-pop { 0% { transform: scale(.4); } 60% { transform: scale(1.2); } 100% { transform: scale(1); } }
+  @keyframes csu-spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 400px) {
+    .csu__offer { gap: 10px; padding: 12px; }
+    .csu__cta { padding: 0 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .csu, .csu * { animation: none !important; transition: none !important; }
+  }
+{% endstylesheet %}
+
+{% javascript %}
+  (function () {
+    if (customElements.get('cart-subscribe-upgrade')) return;
+
+    var TAG = '[cart-subscribe-upgrade]';
+    var ICON_REPEAT = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.4-4.6"/><path d="M4 13a8 8 0 0 0 14.4 4.6"/><path d="M5 2.5v4h4"/><path d="M19 21.5v-4h-4"/></svg>';
+    var ICON_CHECK = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+
+    // Theme defaults. Horizon first, then common Dawn-family names. Each can be overridden in the section settings.
+    var DEFAULTS = {
+      drawer: 'cart-drawer-component, cart-drawer, #CartDrawer, #cart-drawer, .cart-drawer',
+      row: '[data-key], tr, li, [class*="cart-item"], [class*="line-item"]',
+      linePrice: '.cart-items__price, .cart-item__totals .price, .cart-item__price-wrapper, [class*="line-price"]',
+      unitPrice: '.cart-items__unit-price-wrapper > div',
+      total: '.cart-totals__total-value, .totals__total-value, .totals__subtotal-value, [class*="total"][class*="value"]'
+    };
+    var POSITIONS = { first: 0, second: 1, third: 2 };
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+    function root() {
+      return (window.Shopify && window.Shopify.routes && window.Shopify.routes.root) || '/';
+    }
+    // Fill a shopper-facing template. Values in `map` are already-escaped HTML.
+    function fill(tpl, map) {
+      return esc(tpl).replace(/\[(percent|price|savings|frequency)\]/g, function (m, k) {
+        return map[k] == null ? '' : map[k];
+      });
+    }
+    function freqLabel(plan) {
+      var v = plan && plan.options && plan.options[0] && plan.options[0].value;
+      var s = String(v || (plan && plan.name) || '').trim();
+      // "Deliver every 4 weeks" / "Delivery every 4 weeks" / "Every 4 weeks" -> "4 weeks"
+      return s.replace(/^(deliver(y|ed)?\s+)?every\s+/i, '');
+    }
+    function percentFor(plan, price, was) {
+      var adj = plan && plan.price_adjustments && plan.price_adjustments[0];
+      if (adj && adj.value_type === 'percentage' && Number(adj.value) > 0) return Math.round(Number(adj.value)) + '%';
+      return was > 0 ? Math.round((was - price) / was * 100) + '%' : '';
+    }
+    function sectionIds() {
+      var ids = [];
+      document.querySelectorAll('cart-items-component[data-section-id]').forEach(function (el) {
+        if (ids.indexOf(el.dataset.sectionId) < 0) ids.push(el.dataset.sectionId);
+      });
+      return ids;
+    }
+
+    // Tell us about cart changes made by any theme or app code that uses fetch.
+    function patchFetch() {
+      if (window.__csuFetchPatched || !window.fetch) return;
+      window.__csuFetchPatched = true;
+      var orig = window.fetch;
+      window.fetch = function (input, init) {
+        var url = '';
+        try { url = input instanceof Request ? input.url : String(input); } catch (e) {}
+        var ours = false;
+        try {
+          var h = init && init.headers;
+          ours = !!(h && (h['X-CSU'] || (typeof h.get === 'function' && h.get('X-CSU'))));
+        } catch (e) {}
+        var p = orig.apply(this, arguments);
+        if (!ours && /\/cart\/(add|change|update|clear)(\.js)?(\?|$)/.test(url)) {
+          p.then(function () { document.dispatchEvent(new CustomEvent('csu:cart-changed')); }, function () {});
+        }
+        return p;
+      };
+    }
+
+    class CartSubscribeUpgrade extends HTMLElement {
+      connectedCallback() {
+        if (this._ready) return;
+        var cfgEl = this.querySelector('[data-csu-config]');
+        if (!cfgEl) return;
+        try { this.cfg = JSON.parse(cfgEl.textContent); } catch (e) { console.warn(TAG, 'bad config', e); return; }
+        this._ready = true;
+
+        var self = this;
+        this.owner = this.dataset.sectionId || 'csu';
+        this.sel = {};
+        for (var k in DEFAULTS) this.sel[k] = (this.cfg.selectors && this.cfg.selectors[k] && this.cfg.selectors[k].trim()) || DEFAULTS[k];
+        this.cart = null;
+        this.models = {};      // line key -> view model
+        this.cards = new Map(); // line key -> { card, cell }
+        this.products = {};    // handle -> promise
+        this.productData = {}; // handle -> product JSON (or null)
+        this.busy = {};
+        this.errors = {};
+        this.fresh = null;     // variant id that just became a subscription (gets the check animation)
+        this.focusNext = null; // variant id whose card should take keyboard focus after the redraw
+
+        this.cleanup();
+        this.applyColors();
+
+        // Re-attach after the theme redraws its cart. Watching data-csu-card too: a redraw that resets the
+        // row's attributes drops the card outline, and this puts it back.
+        this.observer = new MutationObserver(function (list) {
+          for (var i = 0; i < list.length; i++) {
+            var t = list[i].target;
+            if (t.nodeType === 1 && !(t.closest && t.closest('[data-csu-owner]'))) { self.schedule(); return; }
+          }
+        });
+        this.observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-csu-card'] });
+
+        this.onLinesUpdate = function (e) {
+          var p = e && e.promise && typeof e.promise.then === 'function' ? e.promise : Promise.resolve(null);
+          p.then(function (r) {
+            if (r && r.detail && r.detail.source === 'cart-subscribe-upgrade') return;
+            self.refresh();
+          }, function () {});
+        };
+        this.onAnyChange = function (e) {
+          if (e && e.detail && e.detail.source === 'cart-subscribe-upgrade') return;
+          self.refresh();
+        };
+        document.addEventListener('shopify:cart:lines-update', this.onLinesUpdate);
+        document.addEventListener('csu:cart-changed', this.onAnyChange);
+        document.addEventListener('cart:updated', this.onAnyChange);
+        patchFetch();
+
+        this.refresh();
+      }
+
+      disconnectedCallback() {
+        if (!this._ready) return;
+        this._ready = false;
+        if (this.observer) this.observer.disconnect();
+        document.removeEventListener('shopify:cart:lines-update', this.onLinesUpdate);
+        document.removeEventListener('csu:cart-changed', this.onAnyChange);
+        document.removeEventListener('cart:updated', this.onAnyChange);
+        this.cleanup();
+      }
+
+      // Remove everything this instance (or a previous one with the same section id) added to the page.
+      cleanup() {
+        var owner = this.owner;
+        document.querySelectorAll('[data-csu-owner="' + owner + '"]').forEach(function (n) { n.remove(); });
+        document.querySelectorAll('[data-csu-hidden="' + owner + '"]').forEach(function (n) { n.removeAttribute('data-csu-hidden'); });
+        document.querySelectorAll('[data-csu-card="' + owner + '"]').forEach(function (n) { n.removeAttribute('data-csu-card'); });
+        if (this.cards) this.cards.clear();
+      }
+
+      // The color settings, as CSS variables on this instance's strips and card rows (one <style> in <head>).
+      applyColors() {
+        var c = this.cfg.colors || {}, decl = '';
+        var map = { buttonBg: '--csu-button-bg', buttonText: '--csu-button-text', highlightBg: '--csu-highlight-bg',
+          highlightText: '--csu-highlight-text', stripBg: '--csu-strip-bg', cardBorder: '--csu-card-border', accent: '--csu-accent' };
+        for (var k in map) {
+          var v = String(c[k] || '').trim();
+          if (v && /^[#\w\s(),.%-]+$/.test(v)) decl += map[k] + ':' + v + ';';
+        }
+        if (!decl) return;
+        var id = '"' + String(this.owner).replace(/["\\]/g, '') + '"';
+        var style = document.createElement('style');
+        style.dataset.csuOwner = this.owner;
+        style.textContent = '[data-csu-card=' + id + '],.csu[data-csu-owner=' + id + '],.csu-total-saving[data-csu-owner=' + id + ']{' + decl + '}';
+        document.head.appendChild(style);
+      }
+
+      /* ---------- money ---------- */
+      money(cents) {
+        var fmt = String(this.cfg.moneyFormat || ('$' + '{' + '{amount}' + '}')).replace(/<[^>]*>/g, '');
+        var m = fmt.match(/\{\{\s*(\w+)\s*\}\}/);
+        var key = m ? m[1] : 'amount';
+        function fix(n, d, ts, ds) {
+          var parts = (n / 100).toFixed(d).split('.');
+          parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ts);
+          return parts.join(ds);
+        }
+        var v;
+        switch (key) {
+          case 'amount_no_decimals': v = fix(cents, 0, ',', '.'); break;
+          case 'amount_with_comma_separator': v = fix(cents, 2, '.', ','); break;
+          case 'amount_no_decimals_with_comma_separator': v = fix(cents, 0, '.', ','); break;
+          case 'amount_with_apostrophe_separator': v = fix(cents, 2, "'", '.'); break;
+          default: v = fix(cents, 2, ',', '.');
+        }
+        return m ? fmt.replace(m[0], v) : v;
+      }
+
+      /* ---------- data ---------- */
+      refresh() {
+        var self = this;
+        clearTimeout(this._t);
+        this._t = setTimeout(function () {
+          fetch(root() + 'cart.js', { headers: { Accept: 'application/json', 'X-CSU': '1' } })
+            .then(function (r) { return r.json(); })
+            .then(function (cart) { self.load(cart); })
+            .catch(function (e) { console.warn(TAG, 'cart fetch failed', e); });
+        }, 60);
+      }
+
+      product(handle) {
+        var self = this;
+        if (!this.products[handle]) {
+          this.products[handle] = fetch(root() + 'products/' + encodeURIComponent(handle) + '.js', { headers: { Accept: 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .catch(function () { return null; })
+            .then(function (p) { self.productData[handle] = p; return p; });
+        }
+        return this.products[handle];
+      }
+
+      load(cart) {
+        if (!cart || !cart.items) return;
+        var self = this;
+        this.cart = cart;
+        var handles = [];
+        cart.items.forEach(function (it) { if (it.handle && handles.indexOf(it.handle) < 0) handles.push(it.handle); });
+        Promise.all(handles.map(function (h) { return self.product(h); })).then(function () {
+          if (self.cart === cart && self._ready) self.build();
+        });
+      }
+
+      // Everything the card needs for one cart line, or null when the line gets no card.
+      model(item) {
+        var p = this.productData[item.handle];
+        var spa = item.selling_plan_allocation || null;
+        var qty = item.quantity;
+        if (!spa && !(item.final_price > 0)) return null; // free gifts and other $0 lines
+        if (item.parent_relationship) return null;         // bundle components / nested lines
+
+        var variant = p && (p.variants || []).filter(function (v) { return v.id === item.variant_id; })[0];
+        var allocs = (variant && variant.selling_plan_allocations) || [];
+        function allocFor(id) { return allocs.filter(function (a) { return a.selling_plan_id === id; })[0]; }
+        var groups = (p && p.selling_plan_groups) || [];
+        var currentId = spa && spa.selling_plan ? spa.selling_plan.id : null;
+
+        var group = null;
+        if (currentId) group = groups.filter(function (g) { return (g.selling_plans || []).some(function (sp) { return sp.id === currentId; }); })[0] || null;
+        if (!group) group = groups.filter(function (g) { return (g.selling_plans || []).some(function (sp) { return allocFor(sp.id); }); })[0] || null;
+
+        var oneTime = variant ? variant.price : null;
+        var plans = (group ? group.selling_plans : []).map(function (sp) {
+          var a = allocFor(sp.id);
+          if (!a) return null;
+          // Skip prepaid plans (price covers several deliveries); "save on every delivery" wouldn't be true.
+          if (sp.id !== currentId && a.per_delivery_price != null && a.price !== a.per_delivery_price) return null;
+          var was = oneTime != null ? oneTime : (a.compare_at_price || a.price);
+          return { id: sp.id, label: freqLabel(sp), price: a.price, was: was, percent: percentFor(sp, a.price, was) };
+        }).filter(Boolean);
+
+        if (currentId) {
+          var unitWas = spa.compare_at_price || oneTime || 0;
+          var unitNow = spa.price != null ? spa.price : item.original_price;
+          var current = plans.filter(function (pl) { return pl.id === currentId; })[0] ||
+            { id: currentId, label: freqLabel(spa.selling_plan), price: unitNow, was: unitWas, percent: percentFor(spa.selling_plan, unitNow, unitWas) };
+          var requires = !!((p && p.requires_selling_plan) || (variant && variant.requires_selling_plan));
+          return {
+            key: item.key, item: item, subscribed: true, plans: plans.length ? plans : [current], current: current,
+            canUnsubscribe: !requires, unitWas: unitWas, unitNow: unitNow,
+            savings: Math.max(0, unitWas - unitNow) * qty, lineWas: unitWas * qty,
+            planName: spa.selling_plan && spa.selling_plan.name
+          };
+        }
+
+        if (!plans.length) return null;
+        var pos = this.cfg.planPosition;
+        var idx = pos === 'last' ? plans.length - 1 : (POSITIONS[pos] != null ? POSITIONS[pos] : 0);
+        var def = plans[Math.min(idx, plans.length - 1)];
+        if (!(def.was > def.price)) return null; // the plan doesn't save anything: nothing to pitch
+        return { key: item.key, item: item, subscribed: false, plans: plans, def: def, savings: (def.was - def.price) * qty };
+      }
+
+      /* ---------- cards ---------- */
+      build() {
+        var self = this, models = {};
+        this.cart.items.forEach(function (item) {
+          var m = self.model(item);
+          if (m) models[item.key] = m;
+        });
+        this.models = models;
+        this.cards.forEach(function (entry, key) {
+          if (!models[key]) {
+            if (entry.cell) entry.cell.remove();
+            entry.card.remove();
+            self.cards.delete(key);
+          }
+        });
+        Object.keys(models).forEach(function (key) { self.renderCard(key, models[key]); });
+        this.attach();
+      }
+
+      renderCard(key, m) {
+        var cfg = this.cfg, t = cfg.text, self = this;
+        var entry = this.cards.get(key);
+        if (!entry) {
+          var card = document.createElement('div');
+          card.className = 'csu';
+          card.dataset.csuOwner = this.owner;
+          card.dataset.csuKey = key;
+          card.addEventListener('click', function (e) {
+            var b = e.target.closest('[data-csu-act]');
+            if (!b || !card.contains(b)) return;
+            e.stopPropagation();
+            if (b.disabled || b.tagName === 'SELECT') return;
+            // e.detail is 0 when Enter/Space pressed the button: only then hand focus to the new card.
+            var keyboard = e.detail === 0;
+            if (b.dataset.csuAct === 'subscribe') self.change(key, Number(b.dataset.plan), keyboard);
+            if (b.dataset.csuAct === 'one-time') self.change(key, null, keyboard);
+          });
+          card.addEventListener('change', function (e) {
+            e.stopPropagation();
+            var s = e.target;
+            if (s && s.dataset && s.dataset.csuAct === 'frequency') self.change(key, Number(s.value), true);
+          });
+          entry = { card: card, cell: null };
+          this.cards.set(key, entry);
+        }
+
+        var html;
+        if (m.subscribed) {
+          var tokens = {
+            percent: esc(m.current.percent), price: esc(this.money(m.unitNow)),
+            savings: '<b>' + esc(this.money(m.savings)) + '</b>', frequency: esc(m.current.label)
+          };
+          var freq = m.plans.length > 1
+            ? '<select data-csu-act="frequency" aria-label="' + esc(t.frequency) + '">' + m.plans.map(function (pl) {
+                return '<option value="' + pl.id + '"' + (pl.id === m.current.id ? ' selected' : '') + '>' + esc(pl.label) + '</option>';
+              }).join('') + '</select>'
+            : '<span class="csu__freq-one">' + esc(m.current.label) + '</span>';
+          html = '<div class="csu__on">' +
+            '<div class="csu__line1"><span class="csu__check">' + ICON_CHECK + '</span>' +
+            '<span class="csu__label">' + esc(t.subscribed) + '</span>' +
+            '<label class="csu__freq"><span>' + esc(t.frequency) + '</span>' + freq + '</label></div>' +
+            '<div class="csu__line2">' +
+            (m.savings > 0 ? '<span class="csu__save">' + fill(t.savings, tokens) + '</span>' : '') +
+            '<span class="csu__status" aria-live="polite">' + esc(t.loading) + '</span>' +
+            '<span class="csu__cmp" hidden><s>' + esc(this.money(m.lineWas)) + '</s>' + esc(this.money(m.item.final_line_price)) + '</span>' +
+            (m.canUnsubscribe ? '<button type="button" class="csu__link" data-csu-act="one-time">' + esc(t.switchBack) + '</button>' : '') +
+            '</div></div>';
+        } else {
+          // Layout A: the whole strip is one button; the pill on the right is its visible call to action.
+          var d = m.def;
+          var tk = {
+            percent: esc(d.percent), price: esc(this.money(d.price)),
+            savings: '<b class="csu__hl">' + esc(this.money(m.savings)) + '</b>', frequency: esc(d.label)
+          };
+          html = '<button type="button" class="csu__offer" data-csu-act="subscribe" data-plan="' + d.id + '">' +
+            '<span class="csu__body"><span class="csu__head">' + fill(t.headline, tk) + '</span>' +
+            '<span class="csu__sub">' + fill(t.subline, tk) + '</span>' +
+            '<span class="csu__status" aria-live="polite">' + esc(t.loading) + '</span></span>' +
+            '<span class="csu__cta"><span class="csu__spin">' + ICON_REPEAT + '</span>' + esc(t.cta) + '</span></button>';
+        }
+        html += '<p class="csu__err" role="alert"' + (this.errors[key] ? '' : ' hidden') + '>' + esc(t.error) + '</p>';
+
+        if (entry.html !== html) {
+          entry.html = html;
+          entry.card.innerHTML = html;
+        }
+        if (m.subscribed && this.fresh === m.item.variant_id) {
+          this.fresh = null;
+          entry.card.classList.remove('is-new');
+          void entry.card.offsetWidth;
+          entry.card.classList.add('is-new');
+        }
+        this.applyState(key);
+      }
+
+      applyState(key) {
+        var entry = this.cards.get(key);
+        if (!entry) return;
+        var busy = !!this.busy[key], card = entry.card;
+        card.classList.toggle('is-busy', busy);
+        card.setAttribute('aria-busy', busy ? 'true' : 'false');
+        card.querySelectorAll('button, select').forEach(function (c) { c.disabled = busy; });
+        var err = card.querySelector('.csu__err');
+        if (err) err.hidden = !this.errors[key];
+      }
+
+      /* ---------- placing cards in the theme's drawer ---------- */
+      findDrawer() {
+        try { return document.querySelector(this.sel.drawer); } catch (e) { return null; }
+      }
+
+      findRow(drawer, item, idx) {
+        var row = null, self = this;
+        try { row = drawer.querySelector('[data-key="' + CSS.escape(item.key) + '"]'); } catch (e) {}
+        if (row && row.closest('[data-csu-owner]')) row = null;
+        if (!row && item.handle) {
+          var nth = this.cart.items.slice(0, idx).filter(function (i) { return i.handle === item.handle; }).length;
+          var rows = [];
+          drawer.querySelectorAll('a[href*="/products/' + item.handle + '"]').forEach(function (a) {
+            if (a.closest('[data-csu-owner]')) return;
+            var r = null;
+            try { r = a.closest(self.sel.row); } catch (e) {}
+            if (r && drawer.contains(r) && rows.indexOf(r) < 0) rows.push(r);
+          });
+          row = rows[nth] || null;
+        }
+        return row;
+      }
+
+      findIn(row, selectorList) {
+        var list = selectorList.split(',');
+        for (var i = 0; i < list.length; i++) {
+          try {
+            var el = row.querySelector(list[i].trim());
+            if (el && !el.closest('[data-csu-owner]')) return el;
+          } catch (e) {}
+        }
+        return null;
+      }
+
+      schedule() {
+        var self = this;
+        if (this._raf) return;
+        this._raf = requestAnimationFrame(function () {
+          self._raf = null;
+          self.attach();
+        });
+      }
+
+      attach() {
+        var drawer = this.findDrawer();
+        if (!drawer || !this.cart) return;
+        var self = this;
+        this.cart.items.forEach(function (item, idx) {
+          var row = self.findRow(drawer, item, idx);
+          if (!row) return;
+          var m = self.models[item.key];
+          var entry = self.cards.get(item.key);
+          var fallback = self.decorate(row, m);
+          if (!m || !entry || row.dataset.parentKey) {
+            if (row.hasAttribute('data-csu-card')) row.removeAttribute('data-csu-card');
+            return;
+          }
+
+          var wantTd = row.tagName === 'TR';
+          if (wantTd && !entry.cell) {
+            entry.cell = document.createElement('td');
+            entry.cell.className = 'csu-cell';
+            entry.cell.dataset.csuOwner = self.owner;
+            entry.cell.colSpan = 99;
+            entry.cell.appendChild(entry.card);
+          } else if (!wantTd) {
+            if (entry.cell) { entry.cell.remove(); entry.cell = null; }
+            entry.card.classList.add('csu-cell');
+          }
+          var node = entry.cell || entry.card;
+          if (node.parentNode !== row) row.appendChild(node);
+
+          // Outline the theme's row and the strip as one card, where the row is a box we can outline
+          // (grid/flex/block). Real table rows can't take a border or radius: the strip keeps its own outline.
+          var asCard = !!self.cfg.itemCard && /^(grid|inline-grid|flex|inline-flex|block|flow-root)$/.test(getComputedStyle(row).display);
+          if (asCard && row.getAttribute('data-csu-card') !== self.owner) row.setAttribute('data-csu-card', self.owner);
+          else if (!asCard && row.hasAttribute('data-csu-card')) row.removeAttribute('data-csu-card');
+
+          var cmp = entry.card.querySelector('.csu__cmp');
+          if (cmp && cmp.hidden !== !fallback) cmp.hidden = !fallback;
+
+          if (self.focusNext === item.variant_id) {
+            // Keyboard users: the old card was removed with the old line, so put focus on the new one.
+            // Deferred so it runs after the theme's redraw. Themes park lost focus on the body or the
+            // drawer's close button; only take it back from there, never from another cart line.
+            self.focusNext = null;
+            var card = entry.card;
+            setTimeout(function () {
+              var target = card.isConnected && card.querySelector('select, .csu__offer, .csu__link');
+              var active = document.activeElement;
+              var inLine = false;
+              try { inLine = !!(active && active !== document.body && active.closest(self.sel.row) && drawer.contains(active)); } catch (e) {}
+              if (target && !card.contains(active) && !inLine) {
+                try { target.focus({ preventScroll: true }); } catch (e) {}
+              }
+            }, 120);
+          }
+        });
+        this.decorateTotal(drawer);
+      }
+
+      // Crossed-out one-time price on subscription lines, and hiding the theme's duplicate plan name.
+      // Returns true when the line's price element couldn't be found (the card shows the comparison instead).
+      decorate(row, m) {
+        var cfg = this.cfg, owner = this.owner;
+        var show = !!(m && m.subscribed && cfg.strikeLines && m.lineWas > m.item.final_line_price);
+        var lp = this.findIn(row, this.sel.linePrice);
+        this.strike(lp, show ? this.money(m.lineWas) : null);
+        var up = this.findIn(row, this.sel.unitPrice);
+        if (up) {
+          var themeStrike = Array.prototype.some.call(up.querySelectorAll('s'), function (s) { return !s.classList.contains('csu-was'); });
+          this.strike(up, show && !themeStrike && m.unitWas > m.unitNow ? this.money(m.unitWas) : null);
+        }
+
+        var name = m && m.subscribed && cfg.hidePlanName && this.cards.has(m.key) ? String(m.planName || '').trim() : '';
+        row.querySelectorAll('[data-csu-hidden]').forEach(function (el) {
+          if (!name || el.textContent.trim() !== name) el.removeAttribute('data-csu-hidden');
+        });
+        if (name) {
+          row.querySelectorAll('p, span, dd, li, small, div').forEach(function (el) {
+            if (el.children.length || el.closest('[data-csu-owner]')) return;
+            if (el.textContent.trim() === name && !el.hasAttribute('data-csu-hidden')) el.setAttribute('data-csu-hidden', owner);
+          });
+        }
+        return show && !lp;
+      }
+
+      strike(el, text, extraClass) {
+        if (!el) return;
+        var s = null;
+        for (var c = el.firstElementChild; c; c = c.nextElementSibling) {
+          if (c.classList.contains('csu-was')) { s = c; break; }
+        }
+        if (!text) { if (s) s.remove(); return; }
+        if (!s) {
+          s = document.createElement('s');
+          s.className = 'csu-was' + (extraClass ? ' ' + extraClass : '');
+          s.dataset.csuOwner = this.owner;
+          el.prepend(s);
+        }
+        if (s.textContent !== text) s.textContent = text;
+      }
+
+      findTotal(drawer) {
+        // Each selector in priority order (a plain selector list would return whichever matches first in the DOM).
+        var list = this.sel.total.split(',');
+        for (var i = 0; i < list.length; i++) {
+          try {
+            var el = drawer.querySelector(list[i].trim());
+            if (el && !el.closest('[data-csu-owner]')) return el;
+          } catch (e) {}
+        }
+        return null;
+      }
+
+      // Subscriptions are a price change, not a discount, so themes show no savings at the cart total.
+      // Add them: the would-be one-time total crossed out, and a savings line under the total.
+      decorateTotal(drawer) {
+        var self = this, cfg = this.cfg, owner = this.owner, saving = 0;
+        this.cart.items.forEach(function (it) {
+          var m = self.models[it.key];
+          if (m && m.subscribed) saving += m.savings;
+        });
+        var show = !!cfg.showTotalSavings && saving > 0;
+        var total = this.findTotal(drawer);
+
+        // Skip our strike if the free shipping bar already crossed out the total (its strike covers discounts).
+        if (total) this.strike(total, show && !total.querySelector('.fsb-was') ? this.money(this.cart.total_price + saving) : null, 'csu-was--total');
+
+        var line = drawer.querySelector('.csu-total-saving[data-csu-owner="' + owner + '"]');
+        if (!show) { if (line) line.remove(); return; }
+
+        // Under the total's row; if the theme's total can't be found, under the cart lines instead.
+        var anchor = total ? total.parentElement : null;
+        if (!anchor && this.cart.items.length) {
+          var last = this.cart.items.length - 1;
+          var r = this.findRow(drawer, this.cart.items[last], last);
+          if (r) anchor = r.closest('table, ul, ol') || r;
+        }
+        if (!anchor || anchor.closest('[data-csu-owner]')) { if (line) line.remove(); return; }
+
+        if (!line) {
+          line = document.createElement('p');
+          line.className = 'csu-total-saving';
+          line.dataset.csuOwner = owner;
+        }
+        var html = fill(cfg.text.totalSavings, { savings: '<b>' + esc(this.money(saving)) + '</b>' });
+        if (line._csuHtml !== html) { line._csuHtml = html; line.innerHTML = html; }
+        if (anchor.nextElementSibling !== line) anchor.insertAdjacentElement('afterend', line);
+      }
+
+      /* ---------- switching a line ---------- */
+      change(key, planId, keepFocus) {
+        var m = this.models[key];
+        if (!m || this.busy[key]) return;
+        var self = this;
+        var entry = this.cards.get(key);
+        var hadFocus = !!(keepFocus && entry && entry.card.contains(document.activeElement));
+        this.busy[key] = true;
+        delete this.errors[key];
+        this.applyState(key);
+
+        var body = { id: key, quantity: m.item.quantity, selling_plan: planId };
+        var ids = sectionIds();
+        if (ids.length) body.sections = ids.join(',');
+        fetch(root() + 'cart/change.js', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSU': '1' },
+          body: JSON.stringify(body)
+        })
+          .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw j; return j; }); })
+          .then(function (cart) {
+            delete self.busy[key];
+            if (!m.subscribed && planId) self.fresh = m.item.variant_id;
+            if (hadFocus) self.focusNext = m.item.variant_id;
+            self.notifyTheme(cart, m.item);
+            self.load(cart);
+          })
+          .catch(function (err) {
+            delete self.busy[key];
+            self.errors[key] = true;
+            self.applyState(key);
+            console.warn(TAG, 'cart update failed', err);
+          });
+      }
+
+      // Ask the theme to redraw its cart. Horizon (and other themes on Shopify's standard events) listen
+      // for shopify:cart:lines-update; the generic event covers themes that listen for their own names.
+      notifyTheme(cart, item) {
+        var detail = { sections: cart.sections || {}, items: cart.items, source: 'cart-subscribe-upgrade' };
+        var lines = [{ merchandiseId: String(item.variant_id), quantity: item.quantity }];
+        import('https://cdn.shopify.com/storefront/standard-events.js')
+          .then(function (mod) {
+            var E = mod.CartLinesUpdateEvent;
+            if (!E) throw new Error('no CartLinesUpdateEvent');
+            var c = typeof E.createCartFromAjaxResponse === 'function' ? E.createCartFromAjaxResponse(cart) : null;
+            document.dispatchEvent(new E({ action: 'update', context: 'cart', lines: lines, promise: Promise.resolve({ cart: c, detail: detail }) }));
+          })
+          .catch(function () {
+            var ev = new CustomEvent('shopify:cart:lines-update', { bubbles: true });
+            ev.action = 'update'; ev.context = 'cart'; ev.lines = lines;
+            ev.promise = Promise.resolve({ cart: null, detail: detail });
+            document.dispatchEvent(ev);
+          });
+        document.dispatchEvent(new CustomEvent('cart:refresh', { bubbles: true, detail: { cart: cart, source: 'cart-subscribe-upgrade' } }));
+      }
+    }
+
+    customElements.define('cart-subscribe-upgrade', CartSubscribeUpgrade);
+  })();
+{% endjavascript %}
+
+{% schema %}
+{
+  "name": "Cart subscribe upgrade",
+  "tag": "div",
+  "class": "csu-section",
+  "enabled_on": { "groups": ["footer", "header"] },
+  "settings": [
+    { "type": "paragraph", "content": "Shows inside the cart drawer, under items whose product has a subscription plan. The discount and delivery frequencies come from your selling plans (Shopify Subscriptions or any app that uses them)." },
+
+    { "type": "header", "content": "Subscribe button" },
+    {
+      "type": "select", "id": "plan_position", "label": "Frequency the button picks", "default": "second",
+      "info": "Position in the product's list of plans. With plans every 2, 4 and 8 weeks, Second picks 4 weeks.",
+      "options": [
+        { "value": "first", "label": "First plan" },
+        { "value": "second", "label": "Second plan" },
+        { "value": "third", "label": "Third plan" },
+        { "value": "last", "label": "Last plan" }
+      ]
+    },
+    { "type": "text", "id": "button_headline", "label": "Headline", "default": "Subscribe & save [percent]", "info": "[percent] = discount, [price] = subscription price, [savings] = savings per delivery, [frequency] = delivery frequency" },
+    { "type": "text", "id": "button_subline", "label": "Second line", "default": "[price] every [frequency] · Save [savings]" },
+    { "type": "text", "id": "button_cta", "label": "Button label", "default": "Subscribe" },
+    { "type": "checkbox", "id": "item_card", "label": "Outline each item and its offer as one card", "default": true, "info": "Turn off if it clashes with your theme's cart. The offer then shows as its own box under the item." },
+
+    { "type": "header", "content": "Subscribed items" },
+    { "type": "text", "id": "on_label", "label": "Label", "default": "Subscribed" },
+    { "type": "text", "id": "on_frequency_label", "label": "Frequency label", "default": "Deliver every" },
+    { "type": "text", "id": "on_savings", "label": "Savings message", "default": "You save [savings] on every delivery" },
+    { "type": "text", "id": "on_switch_back", "label": "Switch back link", "default": "Switch to one-time" },
+    { "type": "checkbox", "id": "strike_lines", "label": "Show the one-time price crossed out on subscribed items", "default": true },
+    { "type": "checkbox", "id": "hide_plan_name", "label": "Hide the theme's plan name under subscribed items", "default": true, "info": "The frequency picker already shows it." },
+
+    { "type": "header", "content": "Cart total" },
+    { "type": "checkbox", "id": "show_total_savings", "label": "Show subscription savings at the cart total", "default": true, "info": "Crosses out what the cart would cost with everything one-time, and adds a savings line under the total." },
+    { "type": "text", "id": "total_savings_text", "label": "Savings line", "default": "You're saving [savings] on every delivery with Subscribe & save", "info": "[savings] = total subscription savings in the cart" },
+
+    { "type": "header", "content": "Status messages" },
+    { "type": "text", "id": "loading_text", "label": "While updating", "default": "Updating…" },
+    { "type": "text", "id": "error_text", "label": "If the update fails", "default": "Couldn't update this item. Try again." },
+
+    { "type": "header", "content": "Colors" },
+    { "type": "color", "id": "color_button_bg", "label": "Subscribe button", "default": "#1f5b3d" },
+    { "type": "color", "id": "color_button_text", "label": "Subscribe button text", "default": "#ffffff" },
+    { "type": "color", "id": "color_highlight_bg", "label": "Savings highlight", "default": "#f6e05e" },
+    { "type": "color", "id": "color_highlight_text", "label": "Savings highlight text", "default": "#1c2a20" },
+    { "type": "color", "id": "color_strip_bg", "label": "Offer strip background", "default": "#eef6f0" },
+    { "type": "color", "id": "color_card_border", "label": "Item card outline", "default": "#e3e3e3" },
+    { "type": "color", "id": "color_accent", "label": "Headline, checkmark and savings", "default": "#1f5b3d" },
+
+    { "type": "header", "content": "Theme compatibility (advanced)" },
+    { "type": "paragraph", "content": "Leave blank. Only fill these in if the button doesn't show up or the crossed-out price is missing in your theme's cart drawer." },
+    { "type": "text", "id": "drawer_selector", "label": "Cart drawer selector" },
+    { "type": "text", "id": "row_selector", "label": "Cart line row selector" },
+    { "type": "text", "id": "line_price_selector", "label": "Line price selector" },
+    { "type": "text", "id": "unit_price_selector", "label": "Unit price selector" },
+    { "type": "text", "id": "total_selector", "label": "Cart total value selector" }
+  ],
+  "presets": [{ "name": "Cart subscribe upgrade" }]
+}
+{% endschema %}
